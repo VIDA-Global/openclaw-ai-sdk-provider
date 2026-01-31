@@ -1,19 +1,8 @@
-import type { ProviderV3 } from "@ai-sdk/provider";
-
 import { OpenClawResponsesLanguageModel } from "./openclaw-responses-language-model.js";
-
-export type OpenClawProviderSettings = {
-  apiKey?: string;
-  baseURL?: string;
-  headers?: Record<string, string>;
-  fetch?: typeof fetch;
-  generateId?: () => string;
-  providerName?: string;
-};
 
 const DEFAULT_BASE_URL = "http://localhost:18789/v1";
 
-export function createOpenClaw(settings: OpenClawProviderSettings = {}): ProviderV3 & ((modelId: string) => OpenClawResponsesLanguageModel) {
+export function createOpenClaw(settings = {}) {
   const apiKey =
     settings.apiKey ??
     process.env.OPENCLAW_API_KEY ??
@@ -30,7 +19,7 @@ export function createOpenClaw(settings: OpenClawProviderSettings = {}): Provide
   const providerName = settings.providerName ?? "openclaw.responses";
 
   const headers = () => {
-    const out: Record<string, string> = {
+    const out = {
       ...(settings.headers ?? {}),
     };
     if (apiKey) {
@@ -47,11 +36,8 @@ export function createOpenClaw(settings: OpenClawProviderSettings = {}): Provide
     providerName,
   };
 
-  const provider = ((modelId: string) => new OpenClawResponsesLanguageModel(modelId, config)) as ProviderV3 &
-    ((modelId: string) => OpenClawResponsesLanguageModel);
-
+  const provider = (modelId) => new OpenClawResponsesLanguageModel(modelId, config);
   provider.languageModel = provider;
   provider.provider = providerName;
-
   return provider;
 }

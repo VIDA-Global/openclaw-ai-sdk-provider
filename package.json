@@ -6,20 +6,18 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "require": "./src/index.cjs"
     }
   },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.cjs",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
   "files": [
-    "dist"
+    "src"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "clean": "rm -rf dist"
   },
   "dependencies": {
@@ -27,8 +25,5 @@
     "@ai-sdk/provider-utils": "^4.0.4",
     "zod": "^4.0.0"
   },
-  "devDependencies": {
-    "tsup": "^8.0.1",
-    "typescript": "^5.4.5"
-  }
+  "devDependencies": {}
 }

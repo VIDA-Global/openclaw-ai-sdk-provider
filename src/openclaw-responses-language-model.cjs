@@ -1,16 +1,5 @@
-import {
-  APICallError,
-  type LanguageModelV3,
-  type LanguageModelV3CallOptions,
-  type LanguageModelV3FinishReason,
-  type LanguageModelV3Prompt,
-  type LanguageModelV3ToolResultPart,
-  type LanguageModelV3Usage,
-  type SharedV3Headers,
-  type SharedV3ProviderMetadata,
-  type SharedV3Warning,
-} from "@ai-sdk/provider";
-import {
+const { APICallError } = require("@ai-sdk/provider");
+const {
   combineHeaders,
   convertToBase64,
   createEventSourceResponseHandler,
@@ -18,27 +7,8 @@ import {
   createJsonResponseHandler,
   parseProviderOptions,
   postJsonToApi,
-} from "@ai-sdk/provider-utils";
-import { z } from "zod";
-
-type OpenClawResponsesConfig = {
-  baseURL: string;
-  headers: () => Record<string, string>;
-  fetch?: typeof fetch;
-  generateId?: () => string;
-  providerName: string;
-};
-
-type OpenClawProviderOptions = {
-  instructions?: string;
-  user?: string;
-  reasoningEffort?: "low" | "medium" | "high";
-  reasoningSummary?: "auto" | "concise" | "detailed";
-  metadata?: Record<string, string>;
-  maxToolCalls?: number;
-  sessionKey?: string;
-  agentId?: string;
-};
+} = require("@ai-sdk/provider-utils");
+const { z } = require("zod");
 
 const openclawProviderOptionsSchema = z
   .object({
@@ -173,51 +143,7 @@ const openclawFailedResponseHandler = createJsonErrorResponseHandler({
   errorToMessage: (data) => data.error.message,
 });
 
-type OpenClawInputPart =
-  | { type: "input_text"; text: string }
-  | {
-      type: "input_image";
-      source:
-        | { type: "url"; url: string }
-        | { type: "base64"; media_type: string; data: string };
-    }
-  | {
-      type: "input_file";
-      source:
-        | { type: "url"; url: string }
-        | { type: "base64"; media_type: string; data: string; filename?: string };
-    }
-  | { type: "output_text"; text: string };
-
-type OpenClawInputItem =
-  | {
-      type: "message";
-      role: "system" | "developer" | "user" | "assistant";
-      content: string | OpenClawInputPart[];
-    }
-  | {
-      type: "function_call";
-      id?: string;
-      call_id?: string;
-      name: string;
-      arguments: string;
-    }
-  | {
-      type: "function_call_output";
-      call_id: string;
-      output: string;
-    }
-  | {
-      type: "reasoning";
-      content?: string;
-      summary?: string;
-    }
-  | {
-      type: "item_reference";
-      id: string;
-    };
-
-function mapUsage(usage: z.infer<typeof openclawUsageSchema>): LanguageModelV3Usage {
+function mapUsage(usage) {
   return {
     inputTokens: {
       total: usage.input_tokens,
@@ -234,24 +160,21 @@ function mapUsage(usage: z.infer<typeof openclawUsageSchema>): LanguageModelV3Us
   };
 }
 
-function mapFinishReason(params: {
-  status: z.infer<typeof openclawResponseSchema>["status"];
-  sawToolCall: boolean;
-}): LanguageModelV3FinishReason {
-  if (params.sawToolCall || params.status === "incomplete") {
+function mapFinishReason({ status, sawToolCall }) {
+  if (sawToolCall || status === "incomplete") {
     return { unified: "tool-calls", raw: "tool_calls" };
   }
-  switch (params.status) {
+  switch (status) {
     case "completed":
       return { unified: "stop", raw: "completed" };
     case "failed":
       return { unified: "error", raw: "failed" };
     default:
-      return { unified: "other", raw: params.status };
+      return { unified: "other", raw: status };
   }
 }
 
-function toToolOutputString(output: LanguageModelV3ToolResultPart["output"]): string {
+function toToolOutputString(output) {
   switch (output.type) {
     case "text":
     case "error-text":
@@ -268,17 +191,26 @@ function toToolOutputString(output: LanguageModelV3ToolResultPart["output"]): st
   }
 }
 
-function isHttpUrl(value: string): boolean {
+function isHttpUrl(value) {
   return /^https?:\/\//i.test(value);
 }
 
-function convertPromptToInput(prompt: LanguageModelV3Prompt): OpenClawInputItem[] {
-  const input: OpenClawInputItem[] = [];
+function normalizeContentParts(message) {
+  const content = message?.content;
+  if (Array.isArray(content)) return content;
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  return [];
+}
+
+function convertPromptToInput(prompt) {
+  const input = [];
 
   for (const message of prompt) {
     if (message.role === "system" || message.role === "developer") {
-      const text = message.content
-        .filter((part) => part.type === "text")
+      const text = normalizeContentParts(message)
+        .filter((part) => part && part.type === "text")
         .map((part) => part.text)
         .join("\n");
       if (text) {
@@ -288,10 +220,10 @@ function convertPromptToInput(prompt: LanguageModelV3Prompt): OpenClawInputItem[
     }
 
     if (message.role === "user" || message.role === "assistant") {
-      const contentParts: OpenClawInputPart[] = [];
+      const contentParts = [];
       const assistant = message.role === "assistant";
 
-      for (const part of message.content) {
+      for (const part of normalizeContentParts(message)) {
         if (part.type === "text") {
           contentParts.push({
             type: assistant ? "output_text" : "input_text",
@@ -365,7 +297,8 @@ function convertPromptToInput(prompt: LanguageModelV3Prompt): OpenClawInputItem[
     }
 
     if (message.role === "tool") {
-      for (const part of message.content) {
+      const toolParts = Array.isArray(message.content) ? message.content : [];
+      for (const part of toolParts) {
         if (part.type === "tool-approval-response") {
           continue;
         }
@@ -381,7 +314,7 @@ function convertPromptToInput(prompt: LanguageModelV3Prompt): OpenClawInputItem[
   return input;
 }
 
-function mapTools(tools: LanguageModelV3CallOptions["tools"], warnings: SharedV3Warning[]) {
+function mapTools(tools, warnings) {
   if (!tools || tools.length === 0) return undefined;
   const functionTools = tools.filter((tool) => tool.type === "function");
   const providerTools = tools.filter((tool) => tool.type === "provider");
@@ -406,7 +339,7 @@ function mapTools(tools: LanguageModelV3CallOptions["tools"], warnings: SharedV3
   }));
 }
 
-function mapToolChoice(toolChoice: LanguageModelV3CallOptions["toolChoice"]) {
+function mapToolChoice(toolChoice) {
   if (!toolChoice) return undefined;
   switch (toolChoice.type) {
     case "auto":
@@ -425,12 +358,8 @@ function mapToolChoice(toolChoice: LanguageModelV3CallOptions["toolChoice"]) {
   }
 }
 
-function buildHeaders(
-  baseHeaders: Record<string, string>,
-  headers: SharedV3Headers | undefined,
-  providerOptions: OpenClawProviderOptions | undefined,
-): Record<string, string> {
-  const extra: Record<string, string> = {};
+function buildHeaders(baseHeaders, headers, providerOptions) {
+  const extra = {};
   if (providerOptions?.sessionKey) {
     extra["x-openclaw-session-key"] = providerOptions.sessionKey;
   }
@@ -440,17 +369,13 @@ function buildHeaders(
   return combineHeaders(baseHeaders, headers, extra);
 }
 
-export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
-  specificationVersion = "v3" as const;
-  supportedUrls = {
-    "image/*": [/^https?:\/\/.*$/],
-    "application/pdf": [/^https?:\/\/.*$/],
-  } as const;
-
-  private readonly modelId: string;
-  private readonly config: OpenClawResponsesConfig;
-
-  constructor(modelId: string, config: OpenClawResponsesConfig) {
+class OpenClawResponsesLanguageModel {
+  constructor(modelId, config) {
+    this.specificationVersion = "v3";
+    this.supportedUrls = {
+      "image/*": [/^https?:\/\//i],
+      "application/pdf": [/^https?:\/\//i],
+    };
     this.modelId = modelId;
     this.config = config;
   }
@@ -459,8 +384,8 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
     return this.config.providerName;
   }
 
-  private async getArgs(options: LanguageModelV3CallOptions) {
-    const warnings: SharedV3Warning[] = [];
+  async getArgs(options) {
+    const warnings = [];
 
     if (options.topK != null) {
       warnings.push({ type: "unsupported", feature: "topK" });
@@ -515,7 +440,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
     return { body, warnings, providerOptions };
   }
 
-  async doGenerate(options: LanguageModelV3CallOptions) {
+  async doGenerate(options) {
     const { body, warnings, providerOptions } = await this.getArgs(options);
     const url = `${this.config.baseURL.replace(/\/$/, "")}/responses`;
 
@@ -541,7 +466,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
       });
     }
 
-    const content: LanguageModelV3Content[] = [];
+    const content = [];
     let sawToolCall = false;
 
     for (const item of response.output) {
@@ -552,7 +477,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
             text: part.text,
             providerMetadata: {
               [this.config.providerName]: { itemId: item.id },
-            } as SharedV3ProviderMetadata,
+            },
           });
         }
       } else if (item.type === "function_call") {
@@ -564,7 +489,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
           input: item.arguments,
           providerMetadata: {
             [this.config.providerName]: { itemId: item.id },
-          } as SharedV3ProviderMetadata,
+          },
         });
       } else if (item.type === "reasoning") {
         const text = item.summary ?? item.content;
@@ -574,7 +499,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
             text,
             providerMetadata: {
               [this.config.providerName]: { itemId: item.id },
-            } as SharedV3ProviderMetadata,
+            },
           });
         }
       }
@@ -601,9 +526,10 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
     };
   }
 
-  async doStream(options: LanguageModelV3CallOptions) {
+  async doStream(options) {
     const { body, warnings, providerOptions } = await this.getArgs(options);
     const url = `${this.config.baseURL.replace(/\/$/, "")}/responses`;
+    const providerName = this.config.providerName;
 
     const { responseHeaders, value: response } = await postJsonToApi({
       url,
@@ -615,12 +541,11 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
       fetch: this.config.fetch,
     });
 
-    let responseId: string | undefined;
-    let responseModel: string | undefined;
+    let responseId;
     let sawToolCall = false;
-    let usage: LanguageModelV3Usage | undefined;
-    let finishReason: LanguageModelV3FinishReason | undefined;
-    let activeTextId: string | null = null;
+    let usage;
+    let finishReason;
+    let activeTextId = null;
 
     return {
       stream: response.pipeThrough(
@@ -644,7 +569,6 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
             switch (event.type) {
               case "response.created": {
                 responseId = event.response.id;
-                responseModel = event.response.model;
                 controller.enqueue({
                   type: "response-metadata",
                   id: event.response.id,
@@ -677,8 +601,8 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
                     toolName: item.name,
                     input: item.arguments,
                     providerMetadata: {
-                      [this.config.providerName]: { itemId: item.id },
-                    } as SharedV3ProviderMetadata,
+                      [providerName]: { itemId: item.id },
+                    },
                   });
                 }
                 if (item.type === "reasoning") {
@@ -716,7 +640,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
               usage,
               finishReason: finishReason ?? { unified: "other", raw: "unknown" },
               providerMetadata: responseId
-                ? ({ [this.config.providerName]: { responseId } } as SharedV3ProviderMetadata)
+                ? { [providerName]: { responseId } }
                 : undefined,
             });
           },
@@ -725,3 +649,7 @@ export class OpenClawResponsesLanguageModel implements LanguageModelV3 {
     };
   }
 }
+
+module.exports = {
+  OpenClawResponsesLanguageModel,
+};
