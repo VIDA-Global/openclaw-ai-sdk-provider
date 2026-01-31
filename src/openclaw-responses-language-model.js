@@ -58,6 +58,13 @@ const openclawOutputItemSchema = z.discriminatedUnion("type", [
     status: z.enum(["in_progress", "completed"]).optional(),
   }),
   z.object({
+    type: z.literal("function_call_output"),
+    id: z.string().optional(),
+    call_id: z.string(),
+    output: z.string(),
+    status: z.enum(["in_progress", "completed"]).optional(),
+  }),
+  z.object({
     type: z.literal("reasoning"),
     id: z.string(),
     content: z.string().optional(),
@@ -469,6 +476,7 @@ export class OpenClawResponsesLanguageModel {
 
     const content = [];
     let sawToolCall = false;
+    const toolNamesByCallId = new Map();
 
     for (const item of response.output) {
       if (item.type === "message") {
@@ -483,11 +491,22 @@ export class OpenClawResponsesLanguageModel {
         }
       } else if (item.type === "function_call") {
         sawToolCall = true;
+        toolNamesByCallId.set(item.call_id, item.name);
         content.push({
           type: "tool-call",
           toolCallId: item.call_id,
           toolName: item.name,
           input: item.arguments,
+          providerMetadata: {
+            [this.config.providerName]: { itemId: item.id },
+          },
+        });
+      } else if (item.type === "function_call_output") {
+        content.push({
+          type: "tool-result",
+          toolCallId: item.call_id,
+          toolName: toolNamesByCallId.get(item.call_id),
+          output: item.output,
           providerMetadata: {
             [this.config.providerName]: { itemId: item.id },
           },
@@ -547,6 +566,7 @@ export class OpenClawResponsesLanguageModel {
     let usage;
     let finishReason;
     let activeTextId = null;
+    const toolNamesByCallId = new Map();
 
     return {
       stream: response.pipeThrough(
@@ -596,22 +616,40 @@ export class OpenClawResponsesLanguageModel {
                 const item = event.item;
                 if (item.type === "function_call") {
                   sawToolCall = true;
-                  controller.enqueue({
-                    type: "tool-call",
-                    toolCallId: item.call_id,
-                    toolName: item.name,
-                    input: item.arguments,
-                    providerMetadata: {
-                      [providerName]: { itemId: item.id },
-                    },
-                  });
+                  if (event.type === "response.output_item.added") {
+                    toolNamesByCallId.set(item.call_id, item.name);
+                    controller.enqueue({
+                      type: "tool-call",
+                      toolCallId: item.call_id,
+                      toolName: item.name,
+                      input: item.arguments,
+                      providerMetadata: {
+                        [providerName]: { itemId: item.id },
+                      },
+                    });
+                  }
+                }
+                if (item.type === "function_call_output") {
+                  if (event.type === "response.output_item.done") {
+                    controller.enqueue({
+                      type: "tool-result",
+                      toolCallId: item.call_id,
+                      toolName: toolNamesByCallId.get(item.call_id),
+                      output: item.output,
+                      providerMetadata: {
+                        [providerName]: { itemId: item.id },
+                      },
+                    });
+                  }
                 }
                 if (item.type === "reasoning") {
-                  const text = item.summary ?? item.content;
-                  if (text) {
-                    controller.enqueue({ type: "reasoning-start", id: item.id });
-                    controller.enqueue({ type: "reasoning-delta", id: item.id, delta: text });
-                    controller.enqueue({ type: "reasoning-end", id: item.id });
+                  if (event.type === "response.output_item.added") {
+                    const text = item.summary ?? item.content;
+                    if (text) {
+                      controller.enqueue({ type: "reasoning-start", id: item.id });
+                      controller.enqueue({ type: "reasoning-delta", id: item.id, delta: text });
+                      controller.enqueue({ type: "reasoning-end", id: item.id });
+                    }
                   }
                 }
                 return;
