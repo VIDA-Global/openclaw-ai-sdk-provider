@@ -202,6 +202,32 @@ function isHttpUrl(value) {
   return /^https?:\/\//i.test(value);
 }
 
+function tryParseJson(value) {
+  if (typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeToolResultOutput(raw) {
+  if (raw && typeof raw === "object" && raw.type) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const parsed = tryParseJson(raw);
+    if (parsed !== null) {
+      return { type: "json", value: parsed };
+    }
+    return { type: "text", value: raw };
+  }
+  if (raw !== undefined) {
+    return { type: "json", value: raw };
+  }
+  return { type: "text", value: "" };
+}
+
 function normalizeContentParts(message) {
   const content = message?.content;
   if (Array.isArray(content)) return content;
@@ -505,7 +531,7 @@ class OpenClawResponsesLanguageModel {
           type: "tool-result",
           toolCallId: item.call_id,
           toolName: toolNamesByCallId.get(item.call_id),
-          output: item.output,
+          output: normalizeToolResultOutput(item.output),
           providerMetadata: {
             [this.config.providerName]: { itemId: item.id },
           },
@@ -634,7 +660,7 @@ class OpenClawResponsesLanguageModel {
                       type: "tool-result",
                       toolCallId: item.call_id,
                       toolName: toolNamesByCallId.get(item.call_id),
-                      output: item.output,
+                      output: normalizeToolResultOutput(item.output),
                       providerMetadata: {
                         [providerName]: { itemId: item.id },
                       },
