@@ -1,5 +1,6 @@
 import { APICallError } from "@ai-sdk/provider";
 import {
+  asSchema,
   combineHeaders,
   convertToBase64,
   createEventSourceResponseHandler,
@@ -240,6 +241,32 @@ function normalizeContentParts(message) {
 function convertPromptToInput(prompt) {
   const input = [];
 
+  const unwrapToolOutput = (raw, fallback) => {
+    let candidate = raw ?? fallback;
+    if (typeof candidate === "string") {
+      const parsed = tryParseJson(candidate);
+      if (parsed && typeof parsed === "object") {
+        candidate = parsed;
+      }
+    }
+    if (candidate && typeof candidate === "object") {
+      if (candidate.type === "tool-result" && "output" in candidate) {
+        candidate = candidate.output;
+      } else if (candidate.type === "json" && "value" in candidate) {
+        candidate = candidate.value;
+      } else if (
+        candidate.type === "json" &&
+        candidate.value &&
+        typeof candidate.value === "object" &&
+        candidate.value.type === "tool-result" &&
+        "output" in candidate.value
+      ) {
+        candidate = candidate.value.output;
+      }
+    }
+    return candidate;
+  };
+
   for (const message of prompt) {
     if (message.role === "system" || message.role === "developer") {
       const text = normalizeContentParts(message)
@@ -303,11 +330,21 @@ function convertPromptToInput(prompt) {
           continue;
         }
         if (part.type === "tool-call") {
+          let argumentsValue = part.input;
+          if (argumentsValue === undefined || argumentsValue === null) {
+            argumentsValue = "{}";
+          } else if (typeof argumentsValue !== "string") {
+            try {
+              argumentsValue = JSON.stringify(argumentsValue);
+            } catch {
+              argumentsValue = String(argumentsValue);
+            }
+          }
           input.push({
             type: "function_call",
             call_id: part.toolCallId,
             name: part.toolName,
-            arguments: part.input,
+            arguments: argumentsValue,
           });
           continue;
         }
@@ -335,10 +372,28 @@ function convertPromptToInput(prompt) {
         if (part.type === "tool-approval-response") {
           continue;
         }
+        const toolOutput = unwrapToolOutput(part.output, part);
+        try {
+          const preview =
+            typeof toolOutput === "string"
+              ? toolOutput.slice(0, 500)
+              : JSON.stringify(toolOutput).slice(0, 500);
+          console.log("[openclaw-ai-sdk-provider] tool output", {
+            callId: part.toolCallId,
+            toolName: part.toolName,
+            preview,
+          });
+        } catch {
+          console.log("[openclaw-ai-sdk-provider] tool output", {
+            callId: part.toolCallId,
+            toolName: part.toolName,
+            preview: "<unavailable>",
+          });
+        }
         input.push({
           type: "function_call_output",
           call_id: part.toolCallId,
-          output: toToolOutputString(part.output),
+          output: toToolOutputString(toolOutput),
         });
       }
     }
@@ -348,9 +403,25 @@ function convertPromptToInput(prompt) {
 }
 
 function mapTools(tools, warnings) {
-  if (!tools || tools.length === 0) return undefined;
-  const functionTools = tools.filter((tool) => tool.type === "function");
-  const providerTools = tools.filter((tool) => tool.type === "provider");
+  if (!tools) return undefined;
+  const normalizedTools = Array.isArray(tools)
+    ? tools
+    : typeof tools === "object"
+      ? Object.entries(tools).map(([name, tool]) => ({
+          ...tool,
+          name: tool?.name ?? name,
+          type: tool?.type ?? "function",
+        }))
+      : [];
+
+  if (normalizedTools.length === 0) return undefined;
+
+  const functionTools = normalizedTools.filter(
+    (tool) => !tool?.type || tool.type === "function",
+  );
+  const providerTools = normalizedTools.filter(
+    (tool) => tool?.type && tool.type === "provider",
+  );
 
   if (providerTools.length > 0) {
     warnings.push({
@@ -367,9 +438,27 @@ function mapTools(tools, warnings) {
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.inputSchema,
+      parameters: normalizeToolParameters(tool.inputSchema),
     },
   }));
+}
+
+function normalizeToolParameters(schema) {
+  if (!schema) return undefined;
+  if (schema.jsonSchema && typeof schema.jsonSchema === "object") {
+    return schema.jsonSchema;
+  }
+  if (
+    typeof schema === "object" &&
+    (schema.type || schema.properties || schema.$schema)
+  ) {
+    return schema;
+  }
+  try {
+    return asSchema(schema).jsonSchema;
+  } catch {
+    return schema;
+  }
 }
 
 function mapToolChoice(toolChoice) {
@@ -470,6 +559,18 @@ export class OpenClawResponsesLanguageModel {
             }
           : undefined,
     };
+
+    const toolNames = Array.isArray(body.tools)
+      ? body.tools.map((tool) => tool?.function?.name || tool?.name).filter(Boolean)
+      : [];
+    console.log("[openclaw-ai-sdk-provider] request", {
+      model: body.model,
+      toolCount: toolNames.length,
+      toolNames,
+      toolChoice: body.tool_choice,
+      hasReasoning: !!body.reasoning,
+      inputCount: Array.isArray(body.input) ? body.input.length : 0,
+    });
 
     return { body, warnings, providerOptions };
   }

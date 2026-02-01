@@ -1,5 +1,6 @@
 const { APICallError } = require("@ai-sdk/provider");
 const {
+  asSchema,
   combineHeaders,
   convertToBase64,
   createEventSourceResponseHandler,
@@ -303,11 +304,21 @@ function convertPromptToInput(prompt) {
           continue;
         }
         if (part.type === "tool-call") {
+          let argumentsValue = part.input;
+          if (argumentsValue === undefined || argumentsValue === null) {
+            argumentsValue = "{}";
+          } else if (typeof argumentsValue !== "string") {
+            try {
+              argumentsValue = JSON.stringify(argumentsValue);
+            } catch {
+              argumentsValue = String(argumentsValue);
+            }
+          }
           input.push({
             type: "function_call",
             call_id: part.toolCallId,
             name: part.toolName,
-            arguments: part.input,
+            arguments: argumentsValue,
           });
           continue;
         }
@@ -367,9 +378,27 @@ function mapTools(tools, warnings) {
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.inputSchema,
+      parameters: normalizeToolParameters(tool.inputSchema),
     },
   }));
+}
+
+function normalizeToolParameters(schema) {
+  if (!schema) return undefined;
+  if (schema.jsonSchema && typeof schema.jsonSchema === "object") {
+    return schema.jsonSchema;
+  }
+  if (
+    typeof schema === "object" &&
+    (schema.type || schema.properties || schema.$schema)
+  ) {
+    return schema;
+  }
+  try {
+    return asSchema(schema).jsonSchema;
+  } catch {
+    return schema;
+  }
 }
 
 function mapToolChoice(toolChoice) {
