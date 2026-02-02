@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-ai-sdk-provider",
+  "name": "@vida-global/openclaw-ai-sdk-provider",
   "version": "0.1.0",
   "description": "A custom Vercel AI SDK provider for OpenClaw's /v1/responses API.",
   "license": "MIT",
