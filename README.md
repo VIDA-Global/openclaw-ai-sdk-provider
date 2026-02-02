@@ -1,11 +1,18 @@
-# openclaw-ai-sdk-provider
+# @vida-global/openclaw-ai-sdk-provider
 
-A custom Vercel AI SDK provider for OpenClaw's `/v1/responses` API.
+Community provider for the [Vercel AI SDK](https://ai-sdk.dev) that targets OpenClaw’s OpenResponses-compatible `/v1/responses` gateway.
 
-## Usage
+## Install
+
+```bash
+npm install @vida-global/openclaw-ai-sdk-provider
+```
+
+## Basic usage
 
 ```ts
-import { createOpenClaw } from "openclaw-ai-sdk-provider";
+import { generateText } from "ai";
+import { createOpenClaw } from "@vida-global/openclaw-ai-sdk-provider";
 
 const openclaw = createOpenClaw({
   baseURL: process.env.OPENCLAW_BASE_URL ?? "http://localhost:18789/v1",
@@ -13,21 +20,41 @@ const openclaw = createOpenClaw({
 });
 
 const model = openclaw("openclaw:main");
+
+const result = await generateText({
+  model,
+  prompt: "Hello from OpenClaw!",
+});
 ```
 
-### Provider options
+## Streaming
 
-The provider supports OpenClaw-specific options via `providerOptions.openclaw`:
+```ts
+import { streamText } from "ai";
+import { createOpenClaw } from "@vida-global/openclaw-ai-sdk-provider";
+
+const openclaw = createOpenClaw({ apiKey: process.env.OPENCLAW_TOKEN });
+const model = openclaw("openclaw:main");
+
+const { textStream } = await streamText({
+  model,
+  prompt: "Summarize the last 3 messages.",
+});
+```
+
+## Provider options
+
+OpenClaw-specific options are passed via `providerOptions.openclaw`:
 
 ```ts
 {
   providerOptions: {
     openclaw: {
-      instructions: "system guidance",
-      user: "vida:user:123",
-      reasoningEffort: "low",
-      reasoningSummary: "concise",
-      metadata: { source: "vida" },
+      instructions: "System guidance",
+      user: "customer:123",          // stable session routing
+      reasoningEffort: "low",        // low | medium | high
+      reasoningSummary: "concise",   // auto | concise | detailed
+      metadata: { source: "demo" },
       maxToolCalls: 3,
       sessionKey: "agent:main:openai:abc123",
       agentId: "main"
@@ -36,7 +63,26 @@ The provider supports OpenClaw-specific options via `providerOptions.openclaw`:
 }
 ```
 
+### Environment variables
+
+The provider reads these by default:
+
+- `OPENCLAW_BASE_URL` (default: `http://localhost:18789/v1`)
+- `OPENCLAW_API_KEY` or `OPENCLAW_TOKEN` (bearer token)
+- `CLAWDBOT_BASE_URL` / `CLAWDBOT_TOKEN` (legacy aliases)
+
+## Tools (function calling)
+
+OpenClaw’s gateway supports OpenResponses function tools. The provider maps AI SDK tools to:
+
+```json
+{ "type": "function", "function": { "name", "description", "parameters" } }
+```
+
+When the model calls a tool, OpenClaw returns `function_call` items. To continue the turn, send a follow-up `function_call_output` with the tool result. The AI SDK handles this for you when using the standard tool-calling flow.
+
 ## Notes
 
-- This provider speaks OpenClaw's OpenResponses schema (input items must include `type: "message"`).
-- OpenClaw currently does not stream tool logs over `/v1/responses`; tool calls are only returned in the `response.output` items when OpenClaw stops for a tool call.
+- OpenClaw uses OpenResponses-style items internally; the provider converts AI SDK prompts to OpenResponses `input` items.
+- File and image parts are supported; URLs and base64 payloads are forwarded as `input_file` / `input_image`.
+- `sessionKey` and `agentId` are forwarded via headers `x-openclaw-session-key` and `x-openclaw-agent-id`.
