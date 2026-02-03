@@ -473,6 +473,9 @@ class OpenClawResponsesLanguageModel {
       providerOptions: options.providerOptions,
       schema: openclawProviderOptionsSchema,
     });
+    if (providerOptions?.reasoningEffort) {
+      warnings.push({ type: "unsupported", feature: "reasoningEffort" });
+    }
 
     const input = convertPromptToInput(options.prompt);
     const tools = mapTools(options.tools, warnings);

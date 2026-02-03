@@ -373,23 +373,6 @@ function convertPromptToInput(prompt) {
           continue;
         }
         const toolOutput = unwrapToolOutput(part.output, part);
-        try {
-          const preview =
-            typeof toolOutput === "string"
-              ? toolOutput.slice(0, 500)
-              : JSON.stringify(toolOutput).slice(0, 500);
-          console.log("[openclaw-ai-sdk-provider] tool output", {
-            callId: part.toolCallId,
-            toolName: part.toolName,
-            preview,
-          });
-        } catch {
-          console.log("[openclaw-ai-sdk-provider] tool output", {
-            callId: part.toolCallId,
-            toolName: part.toolName,
-            preview: "<unavailable>",
-          });
-        }
         input.push({
           type: "function_call_output",
           call_id: part.toolCallId,
@@ -534,6 +517,9 @@ export class OpenClawResponsesLanguageModel {
       providerOptions: options.providerOptions,
       schema: openclawProviderOptionsSchema,
     });
+    if (providerOptions?.reasoningEffort) {
+      warnings.push({ type: "unsupported", feature: "reasoningEffort" });
+    }
 
     const input = convertPromptToInput(options.prompt);
     const tools = mapTools(options.tools, warnings);
@@ -559,18 +545,6 @@ export class OpenClawResponsesLanguageModel {
             }
           : undefined,
     };
-
-    const toolNames = Array.isArray(body.tools)
-      ? body.tools.map((tool) => tool?.function?.name || tool?.name).filter(Boolean)
-      : [];
-    console.log("[openclaw-ai-sdk-provider] request", {
-      model: body.model,
-      toolCount: toolNames.length,
-      toolNames,
-      toolChoice: body.tool_choice,
-      hasReasoning: !!body.reasoning,
-      inputCount: Array.isArray(body.input) ? body.input.length : 0,
-    });
 
     return { body, warnings, providerOptions };
   }
