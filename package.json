@@ -1,6 +1,6 @@
 {
   "name": "@vida-global/openclaw-ai-sdk-provider",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A custom Vercel AI SDK provider for OpenClaw's /v1/responses API.",
   "homepage": "https://github.com/VIDA-Global/openclaw-ai-sdk-provider#readme",
   "repository": {
