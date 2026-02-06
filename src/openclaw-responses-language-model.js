@@ -69,8 +69,8 @@ const openclawOutputItemSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("reasoning"),
     id: z.string(),
-    content: z.string().optional(),
-    summary: z.string().optional(),
+    content: z.unknown().optional(),
+    summary: z.unknown().optional(),
   }),
 ]);
 
@@ -211,6 +211,47 @@ function tryParseJson(value) {
   } catch {
     return null;
   }
+}
+
+function extractReasoningTextValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => extractReasoningTextValue(part))
+      .filter((text) => typeof text === "string" && text.length > 0)
+      .join("\n");
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.text === "string") {
+      return value.text;
+    }
+    if ("summary" in value) {
+      const summaryText = extractReasoningTextValue(value.summary);
+      if (summaryText) {
+        return summaryText;
+      }
+    }
+    if ("content" in value) {
+      const contentText = extractReasoningTextValue(value.content);
+      if (contentText) {
+        return contentText;
+      }
+    }
+  }
+  return "";
+}
+
+function extractReasoningText(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+  const summaryText = extractReasoningTextValue(item.summary);
+  if (summaryText) {
+    return summaryText;
+  }
+  return extractReasoningTextValue(item.content);
 }
 
 function normalizeToolResultOutput(raw) {
@@ -615,7 +656,7 @@ export class OpenClawResponsesLanguageModel {
           },
         });
       } else if (item.type === "reasoning") {
-        const text = item.summary ?? item.content;
+        const text = extractReasoningText(item);
         if (text) {
           content.push({
             type: "reasoning",
@@ -703,8 +744,13 @@ export class OpenClawResponsesLanguageModel {
                 return;
               }
               case "response.output_text.delta": {
+                const nextTextId = event.item_id;
                 if (!activeTextId) {
-                  activeTextId = event.item_id;
+                  activeTextId = nextTextId;
+                  controller.enqueue({ type: "text-start", id: activeTextId });
+                } else if (nextTextId !== activeTextId) {
+                  controller.enqueue({ type: "text-end", id: activeTextId });
+                  activeTextId = nextTextId;
                   controller.enqueue({ type: "text-start", id: activeTextId });
                 }
                 controller.enqueue({
@@ -747,7 +793,7 @@ export class OpenClawResponsesLanguageModel {
                 }
                 if (item.type === "reasoning") {
                   if (event.type === "response.output_item.added") {
-                    const text = item.summary ?? item.content;
+                    const text = extractReasoningText(item);
                     if (text) {
                       controller.enqueue({ type: "reasoning-start", id: item.id });
                       controller.enqueue({ type: "reasoning-delta", id: item.id, delta: text });
