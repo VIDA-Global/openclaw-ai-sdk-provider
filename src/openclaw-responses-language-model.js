@@ -18,6 +18,7 @@ const openclawProviderOptionsSchema = z
     reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
     reasoningSummary: z.enum(["auto", "concise", "detailed"]).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
+    providerMetadata: z.record(z.string(), z.unknown()).optional(),
     maxToolCalls: z.number().int().positive().optional(),
     sessionKey: z.string().optional(),
     agentId: z.string().optional(),
@@ -536,6 +537,7 @@ export class OpenClawResponsesLanguageModel {
       instructions: providerOptions?.instructions,
       user: providerOptions?.user,
       metadata: providerOptions?.metadata,
+      provider_metadata: providerOptions?.providerMetadata,
       max_tool_calls: providerOptions?.maxToolCalls,
       reasoning:
         providerOptions?.reasoningEffort || providerOptions?.reasoningSummary
