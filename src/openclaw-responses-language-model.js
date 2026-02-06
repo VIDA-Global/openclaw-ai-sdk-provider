@@ -43,6 +43,11 @@ const openclawOutputTextSchema = z.object({
   text: z.string(),
 });
 
+const openclawReasoningSummaryPartSchema = z.object({
+  type: z.literal("summary_text"),
+  text: z.string(),
+});
+
 const openclawOutputItemSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("message"),
@@ -144,6 +149,61 @@ const openclawStreamEventSchema = z.discriminatedUnion("type", [
     output_index: z.number().int(),
     content_index: z.number().int(),
     part: openclawOutputTextSchema,
+  }),
+  z.object({
+    type: z.literal("response.reasoning_summary_part.added"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    summary_index: z.number().int(),
+    part: openclawReasoningSummaryPartSchema,
+  }),
+  z.object({
+    type: z.literal("response.reasoning_summary_text.delta"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    summary_index: z.number().int(),
+    delta: z.string(),
+  }),
+  z.object({
+    type: z.literal("response.reasoning_summary_text.done"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    summary_index: z.number().int(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("response.reasoning_summary_part.done"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    summary_index: z.number().int(),
+    part: openclawReasoningSummaryPartSchema,
+  }),
+  z.object({
+    type: z.literal("response.reasoning_text.delta"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    content_index: z.number().int(),
+    delta: z.string(),
+  }),
+  z.object({
+    type: z.literal("response.reasoning_text.done"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    content_index: z.number().int(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("response.function_call_arguments.delta"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    delta: z.string(),
+  }),
+  z.object({
+    type: z.literal("response.function_call_arguments.done"),
+    item_id: z.string(),
+    output_index: z.number().int(),
+    name: z.string(),
+    arguments: z.string(),
   }),
 ]);
 
@@ -711,6 +771,9 @@ export class OpenClawResponsesLanguageModel {
     let finishReason;
     let activeTextId = null;
     const toolNamesByCallId = new Map();
+    const emittedReasoningIds = new Set();
+    const openReasoningIds = new Set();
+    const reasoningDeltaSeenIds = new Set();
 
     return {
       stream: response.pipeThrough(
@@ -760,6 +823,46 @@ export class OpenClawResponsesLanguageModel {
                 });
                 return;
               }
+              case "response.reasoning_summary_text.delta":
+              case "response.reasoning_text.delta": {
+                const reasoningId = event.item_id || null;
+                if (!reasoningId || emittedReasoningIds.has(reasoningId)) {
+                  return;
+                }
+                if (!openReasoningIds.has(reasoningId)) {
+                  controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                  openReasoningIds.add(reasoningId);
+                }
+                controller.enqueue({
+                  type: "reasoning-delta",
+                  id: reasoningId,
+                  delta: event.delta,
+                });
+                reasoningDeltaSeenIds.add(reasoningId);
+                return;
+              }
+              case "response.reasoning_summary_text.done":
+              case "response.reasoning_text.done": {
+                const reasoningId = event.item_id || null;
+                if (!reasoningId || emittedReasoningIds.has(reasoningId)) {
+                  return;
+                }
+                if (!openReasoningIds.has(reasoningId)) {
+                  controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                  openReasoningIds.add(reasoningId);
+                }
+                if (!reasoningDeltaSeenIds.has(reasoningId) && event.text) {
+                  controller.enqueue({
+                    type: "reasoning-delta",
+                    id: reasoningId,
+                    delta: event.text,
+                  });
+                }
+                controller.enqueue({ type: "reasoning-end", id: reasoningId });
+                openReasoningIds.delete(reasoningId);
+                emittedReasoningIds.add(reasoningId);
+                return;
+              }
               case "response.output_item.added":
               case "response.output_item.done": {
                 const item = event.item;
@@ -792,12 +895,18 @@ export class OpenClawResponsesLanguageModel {
                   }
                 }
                 if (item.type === "reasoning") {
-                  if (event.type === "response.output_item.added") {
-                    const text = extractReasoningText(item);
-                    if (text) {
-                      controller.enqueue({ type: "reasoning-start", id: item.id });
-                      controller.enqueue({ type: "reasoning-delta", id: item.id, delta: text });
-                      controller.enqueue({ type: "reasoning-end", id: item.id });
+                  const reasoningId = item.id || null;
+                  if (reasoningId && emittedReasoningIds.has(reasoningId)) {
+                    return;
+                  }
+                  const text = extractReasoningText(item);
+                  if (text) {
+                    controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                    controller.enqueue({ type: "reasoning-delta", id: reasoningId, delta: text });
+                    controller.enqueue({ type: "reasoning-end", id: reasoningId });
+                    openReasoningIds.delete(reasoningId);
+                    if (reasoningId) {
+                      emittedReasoningIds.add(reasoningId);
                     }
                   }
                 }
